@@ -53,6 +53,7 @@ function BLEMO_MLS(Global)
     current_St = 1;
     
     while Global.NotTermination(Elite_Population,true)
+        maxFE = Global.TotalMaxFEs();
         
         ID = find(Population.labels);
         [Population(ID),History_data] = lower_level_optimize(Population(ID),History_data,redundant_dec_lobj,T_l,alpha,belta,LMaxG);
@@ -136,7 +137,8 @@ function BLEMO_MLS(Global)
         end
         
         %% Update Qtable
-        pha = 1-(pha0*Global.upper_FEs/Global.maxFEs(1));
+        FEProgress = min(1,(Global.upper_FEs + Global.lower_FEs)/maxFE);
+        pha = 1-(pha0*FEProgress);
         
         if current_Ac~=3 || (current_Ac==3 && current_St==4)
             if New_St<3
@@ -173,7 +175,7 @@ function BLEMO_MLS(Global)
         current_St = New_St;
         
         %% Update action
-        rnd = 0.5*(1+Global.upper_FEs/Global.maxFEs(1));
+        rnd = 0.5*(1+FEProgress);
         Last_Ac = current_Ac;
         if length(unique(Qtable(current_St,:)))>1 && rand < rnd && all(Qtable(current_St,:)~=0)
             Actions_temp = find(Qtable(current_St,:)==max(Qtable(current_St,:)));
@@ -193,7 +195,7 @@ function BLEMO_MLS(Global)
         
         Global.upper_Output(Population,2); 
 
-        if any([Global.upper_FEs,Global.lower_FEs] > Global.maxFEs) 
+        if Global.upper_FEs + Global.lower_FEs >= maxFE
             Global.NotTermination(Elite_Population,false);
         end
     end

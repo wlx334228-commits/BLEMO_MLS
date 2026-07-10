@@ -110,9 +110,9 @@ classdef GLOBAL < handle
             % Invoke obj.outputFcn
             drawnow();
             
-            % Detect whether the number of evaluations has exceeded
+            % Detect whether the total number of evaluations has exceeded
             if nargin < 3
-                if any([obj.upper_FEs,obj.lower_FEs] > obj.maxFEs)
+                if obj.upper_FEs + obj.lower_FEs >= obj.TotalMaxFEs()
                     notermination = false;
                 else
                     notermination = true;
@@ -128,6 +128,15 @@ classdef GLOBAL < handle
             assert(notermination,'GLOBAL:Termination','Algorithm has terminated');
             
             tic;
+        end
+
+        function value = TotalMaxFEs(obj)
+            value = obj.maxFEs;
+            if isempty(value)
+                value = inf;
+            elseif numel(value) > 1
+                value = sum(value(:));
+            end
         end
         
        %% 初始化
