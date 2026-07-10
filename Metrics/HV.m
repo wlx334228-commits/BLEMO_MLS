@@ -1,32 +1,72 @@
-function [Score,PopObj] = HV(PopObj,PF)
+function [Score,PopObj] = HV(Population,optimum,problemName)
 % <metric> <max>
-% Hypervolume
+% Hypervolume using the same final-population convention as FG-TLEA.
 
-%------------------------------- Reference --------------------------------
-% E. Zitzler and L. Thiele, Multiobjective evolutionary algorithms: A
-% comparative case study and the strength Pareto approach, IEEE
-% Transactions on Evolutionary Computation, 1999, 3(4): 257-271.
-%------------------------------- Copyright --------------------------------
-% Copyright (c) 2018-2019 BIMK Group. You are free to use the PlatEMO for
-% research purposes. All publications which use this platform or any code
-% in the platform should acknowledge the use of "PlatEMO" and reference "Ye
-% Tian, Ran Cheng, Xingyi Zhang, and Yaochu Jin, PlatEMO: A MATLAB platform
-% for evolutionary multi-objective optimization [educational forum], IEEE
-% Computational Intelligence Magazine, 2017, 12(4): 73-87".
-%--------------------------------------------------------------------------
+    if nargin < 3
+        problemName = '';
+    end
 
-    % Normalize the population according to the reference point set
-    [N,M]  = size(PopObj);
-    fmin   = min(min(PopObj,[],1),zeros(1,M));
-    fmax   = max(PF,[],1)*1.1;
-    PopObj = (PopObj-repmat(fmin,N,1))./repmat(fmax-fmin,N,1);
-    PopObj(any(PopObj>1,2),:) = [];
-    % The reference point is set to (1,1,...)
-    RefPoint = ones(1,M);
+    if isa(optimum,'GLOBAL')
+        Global = optimum;
+        problemName = class(Global.problem);
+        optimum = FGTLEAOptimumForHV(problemName,Global.PF);
+    end
+
+    [PopObj,ulCon,llCon] = ExtractPopulation(Population);
+    if isempty(PopObj)
+        Score = 0;
+        return;
+    end
+    ulCon = NormalizeConstraints(ulCon,size(PopObj,1));
+    llCon = NormalizeConstraints(llCon,size(PopObj,1));
+
+    feasible = true(size(PopObj,1),1);
+    if ~isempty(llCon)
+        feasible = feasible & ~any(llCon > 0,2);
+    end
+    if ~isempty(ulCon)
+        feasible = feasible & ~any(ulCon > 0,2);
+    end
+    PopObj = PopObj(feasible,:);
+
+    if isempty(PopObj)
+        Score = 0;
+        return;
+    end
+
+    switch problemName
+        case 'TP1'
+            F2 = PopObj(:,2);
+            F1 = -1 - F2 - sqrt(2*(F2+0.5).^2 + 0.5);
+            PopObj(PopObj(:,1) < F1,:) = [];
+        case 'TP2'
+            F2 = PopObj(:,2);
+            F1 = F2/2 + (1 - sqrt(F2/2)).^2;
+            PopObj(PopObj(:,1) < F1,:) = [];
+    end
+
+    if isempty(PopObj)
+        Score = 0;
+        return;
+    end
+
+    [N,M] = size(PopObj);
+    if size(optimum,2) ~= M
+        Score = NaN;
+        return;
+    end
+    fmin = min(min(PopObj,[],1),zeros(1,M));
+    fmax = max(optimum,[],1);
+    denominator = (fmax - fmin) * 1.1;
+
+    PopObj = (PopObj - repmat(fmin,N,1))./repmat(denominator,N,1);
+    PopObj(any(PopObj > 1,2),:) = [];
+
+    RefPoint = ones(1,M) * 1.1;
+
     if isempty(PopObj)
         Score = 0;
     elseif M < 4
-        % Calculate the exact HV value
         pl = sortrows(PopObj);
         S  = {1,pl};
         for k = 1 : M-1
@@ -47,16 +87,10 @@ function [Score,PopObj] = HV(PopObj,PF)
             Score = Score + cell2mat(S(i,1))*abs(p(M)-RefPoint(M));
         end
     else
-        % Estimate the HV value by Monte Carlo estimation
         SampleNum = 1000000;
         MaxValue  = RefPoint;
         MinValue  = min(PopObj,[],1);
         Samples   = unifrnd(repmat(MinValue,SampleNum,1),repmat(MaxValue,SampleNum,1));
-        if gpuDeviceCount > 0
-            % GPU acceleration
-            Samples = gpuArray(single(Samples));
-            PopObj  = gpuArray(single(PopObj));
-        end
         for i = 1 : size(PopObj,1)
             drawnow();
             domi = true(size(Samples,1),1);
@@ -68,6 +102,82 @@ function [Score,PopObj] = HV(PopObj,PF)
             Samples(domi,:) = [];
         end
         Score = prod(MaxValue-MinValue)*(1-size(Samples,1)/SampleNum);
+    end
+end
+
+function optimum = FGTLEAOptimumForHV(problemName,fallback)
+% HV only uses max(optimum,[],1). These rows are exactly
+% max(Problem.GetOptimum(10000),[],1) in the FG-TLEA problem classes.
+    switch problemName
+        case 'TP1'
+            optimum = [-1,0];
+        case 'TP2'
+            optimum = [1,0.5];
+        case 'DS1_1'
+            optimum = [1.1,1.1];
+        case 'DS2_1'
+            optimum = [0.8089777225965074,0.0136728251065964];
+        case 'DS3_1'
+            optimum = [1.3999618794836017,0.9999408794349228];
+        case 'DS4'
+            optimum = [1,2];
+        case 'DS5'
+            optimum = [1,1.8];
+        otherwise
+            optimum = fallback;
+    end
+end
+
+function [PopObj,ulCon,llCon] = ExtractPopulation(Population)
+    ulCon = [];
+    llCon = [];
+
+    if isempty(Population)
+        PopObj = [];
+    elseif isa(Population,'INDIVIDUAL')
+        PopObj = Population.upper_objs;
+        ulCon = Population.upper_cons;
+        llCon = Population.lower_cons;
+    elseif isnumeric(Population)
+        PopObj = Population;
+    else
+        PopObj = ReadMember(Population,'ulObjs');
+        if isempty(PopObj)
+            PopObj = ReadMember(Population,'upper_objs');
+        end
+        ulCon = ReadMember(Population,'ulCon');
+        if isempty(ulCon)
+            ulCon = ReadMember(Population,'upper_cons');
+        end
+        llCon = ReadMember(Population,'llCon');
+        if isempty(llCon)
+            llCon = ReadMember(Population,'lower_cons');
+        end
+    end
+end
+
+function value = ReadMember(obj,name)
+    value = [];
+    try
+        value = obj.(name);
+    catch
+        try
+            value = cat(1,obj.(name));
+        catch
+            value = [];
+        end
+    end
+end
+
+function Con = NormalizeConstraints(Con,N)
+    if isempty(Con)
+        return;
+    end
+    if size(Con,1) ~= N && size(Con,2) == N
+        Con = Con';
+    end
+    if size(Con,1) ~= N && numel(Con) == N
+        Con = reshape(Con,N,[]);
     end
 end
 
@@ -118,7 +228,7 @@ function ql = Insert(p,k,pl)
             ql = [ql;Head(pl)];
         end
         pl = Tail(pl);
-    end  
+    end
 end
 
 function p = Head(pl)
@@ -150,5 +260,5 @@ function S_ = Add(cell_,S)
     if m == 0
         S(n+1,:) = cell_(1,:);
     end
-    S_ = S;     
+    S_ = S;
 end

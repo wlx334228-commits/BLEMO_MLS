@@ -1,6 +1,7 @@
 function Run_BLEMO_MLS_7Problems_10Runs
 % Run BLEMO-MLS on seven benchmark problems for 10 independent runs.
-% The script records LGD, UHV, UIGD, upper/lower FEs, and running time.
+% The script records LGD, FG-TLEA-compatible HV, UIGD, upper/lower FEs,
+% and running time.
 
     close all;
     clc;
@@ -11,7 +12,7 @@ function Run_BLEMO_MLS_7Problems_10Runs
     addpath(genpath(root));
 
     algorithm = 'BLEMO_MLS';
-    metrics   = {'UHV','UIGD','LGD'};
+    metrics   = {'HV','UIGD','LGD'};
     runs      = 10;
 
     problems = {
@@ -33,8 +34,10 @@ function Run_BLEMO_MLS_7Problems_10Runs
     end
     csvFile = fullfile(outputDir,'BLEMO_MLS_7Problems_10Runs_summary.csv');
     matFile = fullfile(outputDir,'BLEMO_MLS_7Problems_10Runs_summary.mat');
+    errorLogFile = fullfile(outputDir,'BLEMO_MLS_7Problems_10Runs_errors.log');
 
     rows = repmat(emptyRow(),0,1);
+    initializeSummaryFiles(csvFile,matFile,errorLogFile,rows,problems,metrics);
 
     for p = 1:size(problems,1)
         problemName = problems{p,1};
@@ -73,7 +76,10 @@ function Run_BLEMO_MLS_7Problems_10Runs
                 Global = GLOBAL(inputs{:});
                 Global.Start();
             catch err
-                row.Status = sprintf('ERROR:%s',err.identifier);
+                row.Status = 'ERROR';
+                row.ErrorID = err.identifier;
+                row.ErrorMessage = oneLine(err.message);
+                appendErrorLog(err,errorLogFile,problemName,run);
                 warning('BLEMO-MLS run failed on %s R%d: %s', ...
                     problemName,run,err.message);
             end
@@ -85,7 +91,7 @@ function Run_BLEMO_MLS_7Problems_10Runs
                     row.FEsu        = fieldOrNaN(S.Result,'upper_FEs');
                     row.FEl         = fieldOrNaN(S.Result,'lower_FEs');
                     row.LGD         = fieldOrNaN(S.Result,'LGD');
-                    row.UHV         = fieldOrNaN(S.Result,'UHV');
+                    row.HV          = fieldOrNaN(S.Result,'HV');
                     row.UIGD        = fieldOrNaN(S.Result,'UIGD');
                 else
                     row.Status = 'MISSING_RESULT_STRUCT';
@@ -95,11 +101,33 @@ function Run_BLEMO_MLS_7Problems_10Runs
             end
 
             rows(end+1,1) = row; %#ok<AGROW>
-            writeSummary(rows,csvFile,matFile,problems,metrics);
+            appendRowToCsv(row,csvFile);
+            saveSummaryMat(rows,matFile,problems,metrics);
+            fprintf('Saved task result to %s\n',csvFile);
         end
     end
 
     fprintf('\nFinished. Summary saved to:\n%s\n%s\n',csvFile,matFile);
+end
+
+function initializeSummaryFiles(csvFile,matFile,errorLogFile,rows,problems,metrics)
+    if exist(csvFile,'file')
+        delete(csvFile);
+    end
+    if exist(matFile,'file')
+        delete(matFile);
+    end
+    if exist(errorLogFile,'file')
+        delete(errorLogFile);
+    end
+
+    fid = fopen(csvFile,'w');
+    assert(fid>0,'RunScript:FileOpenError','Cannot open summary CSV: %s',csvFile);
+    cleaner = onCleanup(@()fclose(fid));
+    fprintf(fid,'Problem,Run,LGD,HV,UIGD,FEsu,FEl,RunningTime,MaxFEsu,MaxFEl,Status,ErrorID,ErrorMessage,MatFile\n');
+    clear cleaner;
+
+    saveSummaryMat(rows,matFile,problems,metrics);
 end
 
 function row = emptyRow()
@@ -107,7 +135,7 @@ function row = emptyRow()
         'Problem','', ...
         'Run',NaN, ...
         'LGD',NaN, ...
-        'UHV',NaN, ...
+        'HV',NaN, ...
         'UIGD',NaN, ...
         'FEsu',NaN, ...
         'FEl',NaN, ...
@@ -115,6 +143,8 @@ function row = emptyRow()
         'MaxFEsu',NaN, ...
         'MaxFEl',NaN, ...
         'Status','', ...
+        'ErrorID','', ...
+        'ErrorMessage','', ...
         'MatFile','');
 end
 
@@ -132,8 +162,77 @@ function value = fieldOrNaN(s,fieldName)
     end
 end
 
-function writeSummary(rows,csvFile,matFile,problems,metrics)
-    Summary = struct2table(rows);
-    writetable(Summary,csvFile);
-    save(matFile,'Summary','problems','metrics');
+function appendRowToCsv(row,csvFile)
+    fid = fopen(csvFile,'a');
+    assert(fid>0,'RunScript:FileOpenError','Cannot open summary CSV: %s',csvFile);
+    cleaner = onCleanup(@()fclose(fid));
+    fprintf(fid,'%s,%d,%.16g,%.16g,%.16g,%.16g,%.16g,%.16g,%.16g,%.16g,%s,%s,%s,%s\n', ...
+        csvText(row.Problem), ...
+        row.Run, ...
+        row.LGD, ...
+        row.HV, ...
+        row.UIGD, ...
+        row.FEsu, ...
+        row.FEl, ...
+        row.RunningTime, ...
+        row.MaxFEsu, ...
+        row.MaxFEl, ...
+        csvText(row.Status), ...
+        csvText(row.ErrorID), ...
+        csvText(row.ErrorMessage), ...
+        csvText(row.MatFile));
+    clear cleaner;
+end
+
+function appendErrorLog(err,errorLogFile,problemName,run)
+    fid = fopen(errorLogFile,'a');
+    assert(fid>0,'RunScript:FileOpenError','Cannot open error log: %s',errorLogFile);
+    cleaner = onCleanup(@()fclose(fid));
+    fprintf(fid,'\n==== %s run %d ====\n',problemName,run);
+    fprintf(fid,'%s\n',getReport(err,'extended','hyperlinks','off'));
+    clear cleaner;
+end
+
+function value = oneLine(value)
+    value = strtrim(regexprep(char(value),'\s+',' '));
+end
+
+function value = csvText(value)
+    value = char(value);
+    value = strrep(value,'"','""');
+    value = ['"',value,'"'];
+end
+
+function saveSummaryMat(rows,matFile,problems,metrics)
+    Summary = rowsToTable(rows);
+    save(matFile,'Summary','rows','problems','metrics');
+end
+
+function Summary = rowsToTable(rows)
+    variableNames = {'Problem','Run','LGD','HV','UIGD','FEsu','FEl', ...
+        'RunningTime','MaxFEsu','MaxFEl','Status','ErrorID','ErrorMessage','MatFile'};
+    if isempty(rows)
+        Summary = table('Size',[0 numel(variableNames)], ...
+            'VariableTypes',{'string','double','double','double','double','double','double', ...
+            'double','double','double','string','string','string','string'}, ...
+            'VariableNames',variableNames);
+        return;
+    end
+
+    Summary = table( ...
+        string({rows.Problem}'), ...
+        [rows.Run]', ...
+        [rows.LGD]', ...
+        [rows.HV]', ...
+        [rows.UIGD]', ...
+        [rows.FEsu]', ...
+        [rows.FEl]', ...
+        [rows.RunningTime]', ...
+        [rows.MaxFEsu]', ...
+        [rows.MaxFEl]', ...
+        string({rows.Status}'), ...
+        string({rows.ErrorID}'), ...
+        string({rows.ErrorMessage}'), ...
+        string({rows.MatFile}'), ...
+        'VariableNames',variableNames);
 end

@@ -525,6 +525,12 @@ classdef GLOBAL < handle
                                 catch
                                     Data.result(i).(metricName) = NaN;
                                 end
+                            elseif strcmp(metricName,'HV')
+                                try
+                                    Data.result(i).(metricName) = GLOBAL.Metric(str2func(metricName),Data.result(i).Population,Data);
+                                catch
+                                    Data.result(i).(metricName) = NaN;
+                                end
                             else
                                 try
                                     Data.result(i).(metricName) = GLOBAL.Metric(str2func(metricName),Population_i.upper_best,Data);
@@ -1338,6 +1344,12 @@ classdef GLOBAL < handle
                         try
                             llFeasible     = Data.result(l).Population.lower_feasibles;
                             Data.result(l).(metricName) = GLOBAL.Metric(str2func(metricName),Data.result(l).Population(llFeasible).upper_best,Data);
+                        catch
+                            Data.result(l).(metricName) = NaN;
+                        end
+                    elseif strcmp(metricName,'HV')
+                        try
+                            Data.result(l).(metricName) = GLOBAL.Metric(str2func(metricName),Data.result(l).Population,Data);
                         catch
                             Data.result(l).(metricName) = NaN;
                         end
