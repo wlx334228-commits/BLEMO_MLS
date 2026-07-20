@@ -57,7 +57,8 @@ function [Score,PopObj] = HV(Population,optimum,problemName)
     end
     fmin = min(min(PopObj,[],1),zeros(1,M));
     fmax = max(optimum,[],1);
-    denominator = (fmax - fmin) * 1.1;
+    denominator = fmax - fmin;
+    denominator(denominator <= 0) = eps;
 
     PopObj = (PopObj - repmat(fmin,N,1))./repmat(denominator,N,1);
     PopObj(any(PopObj > 1,2),:) = [];

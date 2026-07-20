@@ -1,4 +1,4 @@
-function [Population,History_data] = lower_level_optimize(Population,History_data,redundant_dec,T,alpha,belta,Maxgen)
+function [Population,History_data] = lower_level_optimize(Population,History_data,redundant_dec,T,alpha,~,Maxgen)
     if isempty(Population)
         return;
     end
@@ -127,7 +127,9 @@ function [Population,History_data] = lower_level_optimize(Population,History_dat
     record_index = [];
     indicator = [];
     status = [];
-    fitness = [];
+    hvWindow = 10;
+    hvTolerance = 1e-3;
+    lowerHVArchives = cell(length(Archive),1);
     
     rate = ones(N,1);
     
@@ -192,16 +194,15 @@ function [Population,History_data] = lower_level_optimize(Population,History_dat
         indicator = cat(2,indicator,indicator_t);
         status = cat(2,status,status_t);
         
-        fitness = cat(2,fitness,sum(indicator_t==1)/(sum(status_t)+eps));
-        
         rate = sum(indicator==1,2)./sum(status,2);
+        lowerHVArchives = UpdateLowerTerminationArchives(lowerHVArchives,Archive,hvWindow);
         
         %% 下层LLS终止判定
         if  t>=alpha
             record_index = find(all(indicator(:,t-alpha+1:end)==0,2));
-            if all(fitness(t-alpha+1:end)<belta) % && any(fitness >= belta)
-                break;
-            end
+        end
+        if LowerTerminationConverged(lowerHVArchives,hvTolerance)
+            break;
         end
         
 %         Global.lower_Output(Population,3);
@@ -348,6 +349,55 @@ function Population = Update(Population,Data,IA,upper_RV)
         
     end
     
+end
+
+function lowerHVArchives = UpdateLowerTerminationArchives(lowerHVArchives,Archive,windowSize)
+    for i = 1:length(Archive)
+        PopObj = LowerTerminationObjs(Archive{i});
+        if ~isempty(PopObj)
+            lowerHVArchives{i} = cat(2,lowerHVArchives{i},{PopObj});
+            if length(lowerHVArchives{i}) > windowSize
+                lowerHVArchives{i}(1:length(lowerHVArchives{i})-windowSize) = [];
+            end
+        end
+    end
+end
+
+function PopObj = LowerTerminationObjs(Archive)
+    PopObj = [];
+    if isempty(Archive)
+        return;
+    end
+    Archive = Archive(Archive.lower_feasibles);
+    if isempty(Archive)
+        return;
+    end
+    FrontNo = NDSort(Archive.lower_objs,1);
+    PopObj = Archive(FrontNo==1).lower_objs;
+end
+
+function converged = LowerTerminationConverged(lowerHVArchives,hvTolerance)
+    converged = false;
+    if isempty(lowerHVArchives)
+        return;
+    end
+    for i = 1:length(lowerHVArchives)
+        hvArchive = lowerHVArchives{i};
+        if length(hvArchive) < 10
+            continue;
+        end
+        PopObjAll = cat(1,hvArchive{:});
+        if isempty(PopObjAll)
+            continue;
+        end
+        RefPoint = max(PopObjAll,[],1) + 0.1;
+        HV = cellfun(@(PopObj)TerminationHV(PopObj,RefPoint),hvArchive);
+        relHV = (max(HV)-min(HV))/(max(HV)+min(HV)+eps);
+        if relHV < hvTolerance
+            converged = true;
+            return;
+        end
+    end
 end
 
 function Obj = CalObj(x,Zmin,RV)

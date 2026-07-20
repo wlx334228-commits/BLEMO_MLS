@@ -1,9 +1,9 @@
 function BLEMO_MLS(Global)
 
     if Global.N(1) <=10
-        [K,T_u,T_l,alpha,belta,theta,LMaxG] = Global.ParameterSet(5,5,5,10,0.1,1e-3,200);
+        [K,T_u,T_l,alpha,belta,theta,LMaxG] = Global.ParameterSet(5,5,5,10,0.1,1e-3,500);
     else
-        [K,T_u,T_l,alpha,belta,theta,LMaxG] = Global.ParameterSet(10,10,5,10,0.1,1e-3,200);
+        [K,T_u,T_l,alpha,belta,theta,LMaxG] = Global.ParameterSet(10,10,5,10,0.1,1e-3,500);
     end
     
     %Q函数更新参数
@@ -14,6 +14,9 @@ function BLEMO_MLS(Global)
     Actions = 1:3;
     Status = 1:4;
     Qtable = zeros(length(Status),length(Actions));
+    hvWindow = 10;
+    hvTolerance = 1e-4;
+    minUpperGen = 100;
     
     W = UniformPoint(K,Global.M(1));
     N = Global.N(3);
@@ -42,6 +45,7 @@ function BLEMO_MLS(Global)
     clear Population_A Population_B Population_i NDrank
     
     [Elite_Population,History_data] = Update_Elites(Elite_Population,History_data,redundant_dec_lobj,W,T_l,alpha,belta,LMaxG,1);
+    upperHVArchive = UpdateTerminationArchive({},UpperTerminationObjs(Elite_Population),hvWindow);
     
     Global.upper_Output(Population,2);
     
@@ -52,8 +56,7 @@ function BLEMO_MLS(Global)
     Rrate = 1;
     current_St = 1;
     
-    while Global.NotTermination(Elite_Population,true)
-        maxFE = Global.TotalMaxFEs();
+    while Global.NotTermination(Elite_Population,UpperTerminationContinue(Global,upperHVArchive,hvTolerance,minUpperGen))
         
         ID = find(Population.labels);
         [Population(ID),History_data] = lower_level_optimize(Population(ID),History_data,redundant_dec_lobj,T_l,alpha,belta,LMaxG);
@@ -137,8 +140,8 @@ function BLEMO_MLS(Global)
         end
         
         %% Update Qtable
-        FEProgress = min(1,(Global.upper_FEs + Global.lower_FEs)/maxFE);
-        pha = 1-(pha0*FEProgress);
+        progress = min(TotalFE(Global)/max(TotalMaxFE(Global),eps),1);
+        pha = 1-(pha0*progress);
         
         if current_Ac~=3 || (current_Ac==3 && current_St==4)
             if New_St<3
@@ -175,7 +178,7 @@ function BLEMO_MLS(Global)
         current_St = New_St;
         
         %% Update action
-        rnd = 0.5*(1+FEProgress);
+        rnd = 0.5*(1+progress);
         Last_Ac = current_Ac;
         if length(unique(Qtable(current_St,:)))>1 && rand < rnd && all(Qtable(current_St,:)~=0)
             Actions_temp = find(Qtable(current_St,:)==max(Qtable(current_St,:)));
@@ -194,9 +197,65 @@ function BLEMO_MLS(Global)
         end
         
         Global.upper_Output(Population,2); 
+        upperHVArchive = UpdateTerminationArchive(upperHVArchive,UpperTerminationObjs(Elite_Population),hvWindow);
 
-        if Global.upper_FEs + Global.lower_FEs >= maxFE
+        if ~UpperTerminationContinue(Global,upperHVArchive,hvTolerance,minUpperGen)
             Global.NotTermination(Elite_Population,false);
         end
     end
+end
+
+function keepGoing = UpperTerminationContinue(Global,hvArchive,hvTolerance,minUpperGen)
+    keepGoing = TotalFE(Global) < TotalMaxFE(Global) && ...
+        (Global.gen < minUpperGen || ~HVArchiveConverged(hvArchive,hvTolerance));
+end
+
+function totalFE = TotalFE(Global)
+    totalFE = Global.upper_FEs + Global.lower_FEs;
+end
+
+function maxFE = TotalMaxFE(Global)
+    if isscalar(Global.maxFEs)
+        maxFE = Global.maxFEs;
+    else
+        maxFE = sum(Global.maxFEs);
+    end
+end
+
+function hvArchive = UpdateTerminationArchive(hvArchive,PopObj,windowSize)
+    if ~isempty(PopObj)
+        hvArchive = cat(2,hvArchive,{PopObj});
+        if length(hvArchive) > windowSize
+            hvArchive(1:length(hvArchive)-windowSize) = [];
+        end
+    end
+end
+
+function PopObj = UpperTerminationObjs(Population)
+    PopObj = [];
+    if isempty(Population)
+        return;
+    end
+    Feasible = Population.upper_feasibles & Population.lower_feasibles;
+    Population = Population(Feasible);
+    if isempty(Population)
+        return;
+    end
+    FrontNo = NDSort(Population.upper_objs,1);
+    PopObj = Population(FrontNo==1).upper_objs;
+end
+
+function converged = HVArchiveConverged(hvArchive,hvTolerance)
+    converged = false;
+    if length(hvArchive) < 10
+        return;
+    end
+    PopObjAll = cat(1,hvArchive{:});
+    if isempty(PopObjAll)
+        return;
+    end
+    RefPoint = max(PopObjAll,[],1) + 0.1;
+    HV = cellfun(@(PopObj)TerminationHV(PopObj,RefPoint),hvArchive);
+    relHV = (max(HV)-min(HV))/(max(HV)+min(HV)+eps);
+    converged = relHV < hvTolerance;
 end

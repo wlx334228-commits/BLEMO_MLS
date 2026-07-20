@@ -1,55 +1,22 @@
-function [Score,PopObj] = UHV(Pop,Global)
-% <metric> <max>
-% Hypervolume
+function Score = TerminationHV(PopObj,RefPoint)
+% Hypervolume used by the FG-TLEA-style convergence termination check.
 
-%------------------------------- Reference --------------------------------
-% E. Zitzler and L. Thiele, Multiobjective evolutionary algorithms: A
-% comparative case study and the strength Pareto approach, IEEE
-% Transactions on Evolutionary Computation, 1999, 3(4): 257-271.
-%------------------------------- Copyright --------------------------------
-% Copyright (c) 2018-2019 BIMK Group. You are free to use the PlatEMO for
-% research purposes. All publications which use this platform or any code
-% in the platform should acknowledge the use of "PlatEMO" and reference "Ye
-% Tian, Ran Cheng, Xingyi Zhang, and Yaochu Jin, PlatEMO: A MATLAB platform
-% for evolutionary multi-objective optimization [educational forum], IEEE
-% Computational Intelligence Magazine, 2017, 12(4): 73-87".
-%--------------------------------------------------------------------------
-    if isnumeric(Global)
-        PF = Global;
-    else
-        PF = Global.PF;
-    end
-    if isa(Pop,'INDIVIDUAL')
-        Pop = SelectEliteForUHV(Pop);
-        PopObj = Pop.upper_objs;
-    else
-        PopObj = Pop;
-    end
     if isempty(PopObj)
         Score = 0;
         return;
     end
 
-    % Normalize upper-level objectives in the same way as FG-TLEA HV.
-    [N,M]  = size(PopObj);
-    fmin   = min(min(PopObj,[],1),zeros(1,M));
-    if ~isempty(PF)
-        fmax = max(PF,[],1);
-    else
-        fmax = max(PopObj,[],1);
-    end
-    Denominator = (fmax-fmin).*1.1;
-    Denominator(Denominator<=0) = eps;
-    PopObj = (PopObj-repmat(fmin,N,1))./repmat(Denominator,N,1);
-    PopObj(any(PopObj>1,2),:) = [];
+    [N,M] = size(PopObj);
+    fmin  = min(min(PopObj,[],1),zeros(1,M));
+    span  = RefPoint - fmin;
+    span(span<=0) = eps;
+    PopObj = (PopObj-repmat(fmin,N,1))./repmat(span,N,1);
+    RefPoint = ones(1,M);
+    PopObj(any(PopObj>repmat(RefPoint,N,1),2),:) = [];
 
-    % The reference point is set to (1.1,1.1,...)
-    RefPoint = ones(1,M).*1.1;
-    
     if isempty(PopObj)
         Score = 0;
     elseif M < 4
-        % Calculate the exact HV value
         pl = sortrows(PopObj);
         S  = {1,pl};
         for k = 1 : M-1
@@ -70,13 +37,11 @@ function [Score,PopObj] = UHV(Pop,Global)
             Score = Score + cell2mat(S(i,1))*abs(p(M)-RefPoint(M));
         end
     else
-        % Estimate the HV value by Monte Carlo estimation
         SampleNum = 1000000;
         MaxValue  = RefPoint;
         MinValue  = min(PopObj,[],1);
         Samples   = unifrnd(repmat(MinValue,SampleNum,1),repmat(MaxValue,SampleNum,1));
         if gpuDeviceCount > 0
-            % GPU acceleration
             Samples = gpuArray(single(Samples));
             PopObj  = gpuArray(single(PopObj));
         end
@@ -92,35 +57,6 @@ function [Score,PopObj] = UHV(Pop,Global)
         end
         Score = prod(MaxValue-MinValue)*(1-size(Samples,1)/SampleNum);
     end
-end
-
-function Elite = SelectEliteForUHV(Pop)
-    Elite = Pop;
-    if isempty(Elite)
-        return;
-    end
-
-    [~,UniqueIndex] = unique(Elite.decs,'rows');
-    Elite = Elite(sort(UniqueIndex));
-
-    Elite = Elite(Elite.lower_feasibles);
-    if isempty(Elite)
-        return;
-    end
-
-    NDls  = NDSort(Elite.lower_objs,1);
-    Elite = Elite(NDls==1);
-    if isempty(Elite)
-        return;
-    end
-
-    Elite = Elite(Elite.upper_feasibles);
-    if isempty(Elite)
-        return;
-    end
-
-    NDus  = NDSort(Elite.upper_objs,1);
-    Elite = Elite(NDus==1);
 end
 
 function S = Slice(pl,k,RefPoint)
@@ -170,7 +106,7 @@ function ql = Insert(p,k,pl)
             ql = [ql;Head(pl)];
         end
         pl = Tail(pl);
-    end  
+    end
 end
 
 function p = Head(pl)
@@ -202,5 +138,5 @@ function S_ = Add(cell_,S)
     if m == 0
         S(n+1,:) = cell_(1,:);
     end
-    S_ = S;     
+    S_ = S;
 end
